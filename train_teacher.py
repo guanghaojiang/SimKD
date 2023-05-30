@@ -12,12 +12,13 @@ import torch.optim as optim
 import torch.distributed as dist
 import torch.multiprocessing as mp
 import torch.backends.cudnn as cudnn
-import tensorboard_logger as tb_logger
+# import tensorboard_logger as tb_logger
 
 from models import model_dict
 from dataset.cifar100 import get_cifar100_dataloaders
 from dataset.imagenet import get_imagenet_dataloader
-from dataset.imagenet_dali import get_dali_data_loader
+# from dataset.imagenet_dali import get_dali_data_loader
+from dataset.graindataset import get_grain_dataloader
 from helper.util import save_dict_to_json, reduce_tensor, adjust_learning_rate
 from helper.loops import train_vanilla as train, validate_vanilla
 
@@ -31,6 +32,7 @@ def parse_option():
     parser.add_argument('--num_workers', type=int, default=8, help='num_workers')
     parser.add_argument('--epochs', type=int, default=240, help='number of training epochs')
     parser.add_argument('--gpu_id', type=str, default='0', help='id(s) for CUDA_VISIBLE_DEVICES')
+    parser.add_argument('--mul_dist', type=bool, default=False, help='Use multi-processing distributed training to launch ')
     
     # optimization
     parser.add_argument('--learning_rate', type=float, default=0.05, help='learning rate')
@@ -40,10 +42,16 @@ def parse_option():
     parser.add_argument('--momentum', type=float, default=0.9, help='momentum')
 
     # dataset
-    parser.add_argument('--model', type=str, default='resnet32x4')
-    parser.add_argument('--dataset', type=str, default='cifar100', choices=['cifar100', 'imagenet'], help='dataset')
+    parser.add_argument('--model', type=str, default='resnet50')
+    parser.add_argument('--dataset', type=str, default='grain', choices=['cifar100', 'imagenet','grain'], help='dataset')
     parser.add_argument('-t', '--trial', type=str, default='0', help='the experiment id')
     parser.add_argument('--dali', type=str, choices=['cpu', 'gpu'], default=None)
+    parser.add_argument('--train_data_folder', type=str, default='/home/jgh/gz_work/Dataset/brown_rice/brown_rice_bjl/', help='path to custom dataset')
+    parser.add_argument('--val_data_folder', type=str, default='/home/jgh/gz_work/Dataset/brown_rice/brown_rice_bjl/', help='path to custom dataset')
+    parser.add_argument('--img_preprocess', type=str, default='ua_ub_da_db_2x2_3c',
+                        choices=['ua_ub_h_3c', 'da_db_h_3c', 'ua_ub_da_db_2x2_3c'], help='imge preprocessing method')
+    
+    parser.add_argument("--local_rank", default=-1, type=int, help=" node rank for distrubuted traing")
 
     # multiprocessing
     parser.add_argument('--multiprocessing-distributed', action='store_true',
@@ -124,6 +132,7 @@ def main_worker(gpu, ngpus_per_node, opt):
     n_cls = {
         'cifar100': 100,
         'imagenet': 1000,
+        'grain': 5,
     }.get(opt.dataset, None)
     
     try:
@@ -174,14 +183,14 @@ def main_worker(gpu, ngpus_per_node, opt):
                         dataset = opt.dataset,
                         batch_size=opt.batch_size, num_workers=opt.num_workers, 
                         multiprocessing_distributed=opt.multiprocessing_distributed)
-        else:
-            train_loader, val_loader = get_dali_data_loader(opt)
+    elif opt.dataset == 'grain':
+        train_loader, val_loader, train_sampler = get_grain_dataloader(opt)
     else:
         raise NotImplementedError(opt.dataset)
 
     # tensorboard
-    if not opt.multiprocessing_distributed or opt.rank % ngpus_per_node == 0:
-        logger = tb_logger.Logger(logdir=opt.tb_folder, flush_secs=2)
+    # if not opt.multiprocessing_distributed or opt.rank % ngpus_per_node == 0:
+        # logger = tb_logger.Logger(logdir=opt.tb_folder, flush_secs=2)
 
     # routine
     for epoch in range(1, opt.epochs + 1):
